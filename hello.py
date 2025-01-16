@@ -1,0 +1,2 @@
+msg = "first"
+print(msg)
