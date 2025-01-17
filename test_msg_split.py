@@ -34,22 +34,5 @@ class TestMsgSplit(unittest.TestCase):
         except ValueError:
             self.assertTrue(True, "test_simple_3: max_len (64) is too small, must throw")
 
-#     def test_simple3(self):
-#         result = ''
-#         for s in split_message(TestMsgSplit.simple_input, 100):
-#             result += s + '\n'
-
-#         self.assertEqual(result, """<strong><p>Paragraph<a href="some href">Anchor text <code>this is code 1</code></a> Now</p></strong>
-# <strong><p> some strong text 1</p>
-# <i>
-# </i></strong>
-# <strong><i><a href="some href 2">Anchor text 2 <code> this is code 2</code>more anc</a></i></strong>
-# <strong><i> And some i text 1
-# </i></strong>
-# <strong><i><a href="some href 3">Anchor text 3 <code> this is code 3</code></a> And som</i></strong>
-# <strong><i>e i text 2
-# </i>
-# </strong></i></strong>""", "Simple input, max_len = 100 - failed")
-
 if __name__ == '__main__':
     unittest.main()
