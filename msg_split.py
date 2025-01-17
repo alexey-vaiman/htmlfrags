@@ -35,7 +35,6 @@ class FragParser(HTMLParser):
         self.max_unbreakable_text_len = -1 # пытаемся посчитать минимальный размер max_len
         self.reset() # понятия не имею, что это — оно было в учёбнике; скорее всего ресетится родительский парсер
  
-    #Defining what the methods should output when called by HTMLParser.
     def handle_starttag(self, tag, attrs):
         # если пришли в новый тег, а перед этим были в самом верхнем — значит кусок хтмл без корневого тега; нигде не используется, возможно пригодится 
         self.no_root = self.no_root or self.i_was_at_the_top
@@ -120,15 +119,15 @@ def split_message(source: str, max_len=MAX_LEN) -> Generator[str]:
     fragParser = FragParser()
     fragParser.feed(source)
     
-    cur_len = 0
-    cur_start = 0
-    prev_frag = None
-    cur_frag = None
+    cur_open_tags_len = 0 # длина текста текущих открывающих тегов, нужна для удобства
+    cur_start = 0 # смещение в рафинированном тексте действующего фрагмента
+    cur_frag = None # действующий фрагмент — НЕ то же самое, что и frag в цикле, тот просто текущий перебираемый фрагмент
+    prev_frag = None # предыдущий перебираемый фрагмент: нужен, когда внезапно оказалось, что с текущим текстом точно не влезет в max_len
 
     # бежим по найденным возможным фрагментам и набираем максимальные куски, не превышающие max_len
     for frag in fragParser.possible_fragments:
         # вычисляем длину текста до текущего фрагмента
-        cur_span = frag.pos - cur_start + frag.close_tags_len + cur_len
+        cur_span = frag.pos - cur_start + frag.close_tags_len + cur_open_tags_len
         # если длина текста до текущего фрагмента превышает значение параметра max_len,
         # то сначала обрываем текст по предыдущему фрагменту (он сохранён в prev_frag),
         # а затем пробуем уместить текущий кусок в фрагмент (см. второй if)
@@ -150,7 +149,7 @@ def split_message(source: str, max_len=MAX_LEN) -> Generator[str]:
             yield fragment_text
             # print('open: ', functools.reduce(lambda x, y: x + '<' + y + '>', prev.open_tags, ''))
             cur_start = prev_frag.pos + prev_frag.width
-            cur_len = prev_frag.open_tags_len
+            cur_open_tags_len = prev_frag.open_tags_len
             cur_span = frag.pos - (prev_frag.pos + prev_frag.width) + frag.close_tags_len + prev_frag.open_tags_len
             cur_frag = prev_frag
         if cur_span <= max_len and cur_span + frag.width > max_len:
@@ -173,7 +172,7 @@ def split_message(source: str, max_len=MAX_LEN) -> Generator[str]:
 
             cur_frag = frag
             cur_start = frag.pos + extra
-            cur_len = frag.open_tags_len
+            cur_open_tags_len = frag.open_tags_len
         prev_frag = frag
 
     open_tags = ''
