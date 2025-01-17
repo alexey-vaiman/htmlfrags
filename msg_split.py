@@ -4,6 +4,8 @@ from typing import List
 import functools
 from typing import Generator
 
+ERROR_CITATION_LENGTH = 25 # количество символов входной строки, выводимых при цитировании в тексте ошибки
+
 @dataclass
 class Pos:
     pos: int # позиция в cleantxt
@@ -27,9 +29,7 @@ class FragParser(HTMLParser):
         self.pos = 0 # текущая позиция внутри рафинированного текста
         self.can_fragment_stack = [True] # стек флагов нахождения в блочном теге – если парсер заедет внутрь неблочного тега, то все вложенные в него теги можно не обрабатывать — их всё равно нельзя разбивать
         self.tag_stack = [''] # стек тегов — чтобы знать, где мы находимся по ходу парсинга; изначально вставляем туда пустой тег — просто для того, чтобы не проверять всё время наличие корневого тега
-        # self.stacklen = 0
         self.possible_fragments = [Pos(0, 0, self.tag_stack.copy(), True)] # список возможных мест, где можно разбить входной текст, pos считается по рафинированному тексту (cleantext); изначально вставляется пустой элемент, чтобы не проверять каждый раз на пустоту, элемент соответствует псевдокорню, добавленному в предудущей строке
-        # self.veryfirsttag = ''
         self.i_was_at_the_top = False # выставляется в True, когда возвращается из самого верхнего тега, нужен для вычисления следующего флага
         self.no_root = False # выставляется в True, если окажется, что мы уже были на самом верху — это означает, что у входного хтмл-я нет корневого тега (вдруг пригодится)
         self.max_unbreakable_text_len = -1 # пытаемся посчитать минимальный размер max_len
@@ -37,7 +37,6 @@ class FragParser(HTMLParser):
  
     #Defining what the methods should output when called by HTMLParser.
     def handle_starttag(self, tag, attrs):
-        # print("Start tag: ", tag)
         # если пришли в новый тег, а перед этим были в самом верхнем — значит кусок хтмл без корневого тега; нигде не используется, возможно пригодится 
         self.no_root = self.no_root or self.i_was_at_the_top
 
@@ -48,10 +47,8 @@ class FragParser(HTMLParser):
         
         self.tag_stack.append(tag) # push тег в стек тегов
 
-        # taglen = len(tag)
-        # заполняем чистый текст
+        # рафинируем тег
         opening_tag_clean_text = '<' + tag
-        # self.stacklen += taglen
         # набираем длину рафинированного открывающего тега (можно было не выпендриваться, а просто по тексту посчитать)
         totlen = len(tag) + 2 # учитываем скобки тега
         # добавляем атрибуты в тег через один пробел
@@ -69,11 +66,6 @@ class FragParser(HTMLParser):
         if can_fragment:
             open_tags = self.tag_stack.copy()[1:]
             self.possible_fragments.append(Pos(self.pos, 0, open_tags, True))
-            # print("added position: ", str(self.pos) + " {" + self.cleantxt + "}")
-            # self.acc.append(Pos( self.pos, 0, self.stack.copy()[1:] ))
-            # open_tags_len = \
-            #     functools.reduce(lambda x, y: x + len(y), open_tags, len(open_tags[0])) if len(open_tags) > 0 else 0
-            # close_tags_len = functools.reduce(lambda x, y: x + len(y) + 1, open_tags, len(open_tags[0]) + 1)
             # вычисляем расстояние между новым и предыдущим возможным фрагментом:
             diff = self.possible_fragments[-1].open_tags_len + self.pos - \
                 (self.possible_fragments[-2].pos + self.possible_fragments[-2].width) + \
@@ -84,7 +76,6 @@ class FragParser(HTMLParser):
         self.can_fragment_stack.append(can_fragment)
  
     def handle_data(self, data):
-        # print("Data: '" + data + "'")
         self.pos += len(data)
         self.cleantext += data
         # важно: если мы находимся в теге, который можно разбивать (то есть он находится на верхушке стека возможных фрагментов), то весь этот текст (data) надо учесть в этой верхушке (в последней записи возможного фрагмента)
@@ -94,30 +85,18 @@ class FragParser(HTMLParser):
  
     def handle_endtag(self, tag):
         # print("End tag: ", tag)
-        # endtag = self.tag_stack.pop()
+        self.tag_stack.pop()
         # добавляем к рафинированному тексту закрывающий тег
         self.cleantext += "</" + tag + ">"
-        # taglen = len(tag)
-        totlen = len(tag) + 2 + 1 # учитываем скобки и косую черту
-        self.pos += totlen
-        # if len(self.stack) == 0 and endtag != self.veryfirsttag:
-        #     print("NO TOP TAG!!!")
-
-        could_fragment = self.can_fragment_stack.pop()
+        self.pos += len(tag) + 2 + 1 # учитываем скобки и косую черту
+        self.can_fragment_stack.pop()
         # CHECK по-моему, можно не проверять на пустой стек
         can_fragment = len(self.can_fragment_stack) == 0 or self.can_fragment_stack[-1]
-        # if not could_fragment and can_fragment: # если нельзя было и опять стало можно, то добавим точку разбиения
         # если можно бить, то после закрывающего тега добавим точку разбиения
         if can_fragment: 
             # делаем копию стека тегов
             open_tags = self.tag_stack.copy()[1:]
             self.possible_fragments.append(Pos( self.pos, 0, open_tags, False))
-            # print("added position: ", str(self.pos) + " {" + self.cleantxt + "}")
-            # print("added position: ", ">>" + self.cleantxt + "<<")
-            # open_tags_len = \
-            #     functools.reduce(lambda x, y: x + len(y), open_tags, len(open_tags[0])) if len(open_tags) > 0 else 0
-            # close_tags_len = functools.reduce(lambda x, y: x + len(y) + 1, open_tags, len(open_tags[0]) + 1)
-            # diff = self.acc[-1].open_tags_len + self.pos - (self.acc[-2].pos + self.acc[-2].width)
             diff = self.possible_fragments[-1].open_tags_len + self.pos - (self.possible_fragments[-2].pos + self.possible_fragments[-2].width) + self.possible_fragments[-1].close_tags_len
             if self.max_unbreakable_text_len < diff:
                 self.max_unbreakable_text_len = diff
@@ -130,43 +109,47 @@ MAX_LEN = 4096
 
 def split_message(source: str, max_len=MAX_LEN) -> Generator[str]:
     """Splits the original message (`source`) into fragments of the specified length(`max_len`)."""
+
+    if source == None:
+        return
+    
+    if len(source) <= max_len:
+        yield source
+        return
+    
     fragParser = FragParser()
     fragParser.feed(source)
     
     cur_len = 0
-    cur_pos = 0
     cur_start = 0
     prev_frag = None
-    frag_cnt = 0
     cur_frag = None
-    # print('clean text:')
-    # print(fragParser.cleantxt)
 
-    # print('\nfragments:')
-    # первый 
     for frag in fragParser.possible_fragments:
         cur_span = frag.pos - cur_start + frag.close_tags_len + cur_len
+        must_frag_next = False
         if cur_span > max_len: # CHECK!!! не может быть первая проверка, иначе исключение (проверкить prev != None)
             # print('frag: ', fragParser.cleantxt[cur_start:prev.pos + 1], prev.close_tags_len)
             # print('open: ', prev.open_tags_len)
-            frag_cnt += 1
             close_tags = functools.reduce(lambda x, y: '</' + y + '>' + x, prev_frag.open_tags, '')
 
-            open_tags = ''
+            # open_tags = ''
+            first_time = cur_frag == None
             # if cur_frag != None: # CHECK!!! вообще-то он тут обязан быть
-            if cur_frag == None:
+            if first_time:
                 cur_frag = prev_frag
                 
-            open_tags = functools.reduce(lambda x, y: x + '<' + y + '>', cur_frag.open_tags, '')
+            # open_tags = functools.reduce(lambda x, y: x + '<' + y + '>', cur_frag.open_tags, '')
             
-            # yield f"-- fragment #{frag_cnt}: {prev_frag.pos + prev_frag.width - cur_start + len(close_tags) + len(open_tags)} chars --"
-
             # if cur_frag != None: # CHECK!!! вообще-то он тут обязан быть
-            fragment_text = open_tags
+            fragment_text = functools.reduce(lambda x, y: x + '<' + y + '>', cur_frag.open_tags, '') if not first_time else ''
             # print(open_tags, end='')
 
             # print(fragParser.cleantxt[cur_start:prev_frag.pos + prev_frag.width] + close_tags)
             fragment_text += fragParser.cleantext[cur_start:prev_frag.pos + prev_frag.width] + close_tags
+            if len(fragment_text) > max_len:
+                raise ValueError(f"Unable to fit fragment into specified length (max_len = {max_len}): start position {cur_start} \"{fragParser.cleantext[cur_start:cur_start + min(ERROR_CITATION_LENGTH, max_len)]}…\"")
+
             yield fragment_text
             # print('open: ', functools.reduce(lambda x, y: x + '<' + y + '>', prev.open_tags, ''))
             cur_start = prev_frag.pos + prev_frag.width
@@ -174,16 +157,15 @@ def split_message(source: str, max_len=MAX_LEN) -> Generator[str]:
             cur_span = frag.pos - (prev_frag.pos + prev_frag.width) + frag.close_tags_len + prev_frag.open_tags_len
             cur_frag = prev_frag
             # cur_span = prev.pos - cur_start + prev.close_tags_len + cur_len
+            must_frag_next = True
             # CHECK!!! добавить проверку на следующее условие, если нет, то исключение
         if cur_span <= max_len and cur_span + frag.width > max_len:
-            frag_cnt += 1
             open_tags = ''
             if cur_frag != None:
                 open_tags = functools.reduce(lambda x, y: x + '<' + y + '>', cur_frag.open_tags, '')
             close_tags = functools.reduce(lambda x, y: '</' + y + '>' + x, frag.open_tags, '')
 
             extra = max_len - cur_span 
-            # yield f"-- fragment #{frag_cnt}: {frag.pos + extra - cur_start + len(close_tags) + len(open_tags)} chars --"
             
             fragment_text = ''
             if cur_frag != None:
@@ -191,31 +173,32 @@ def split_message(source: str, max_len=MAX_LEN) -> Generator[str]:
                 fragment_text = open_tags
 
             fragment_text += fragParser.cleantext[cur_start:frag.pos + extra] + close_tags
+            if len(fragment_text) > max_len:
+                raise ValueError(f"Unable to fit fragment into specified length (max_len = {max_len}): start position {cur_start} \"{fragParser.cleantext[cur_start:cur_start + min(ERROR_CITATION_LENGTH, max_len)]}…\"")
             yield fragment_text
 
             cur_frag = frag
             # print('open: ', functools.reduce(lambda x, y: x + '<' + y + '>', frag.open_tags, ''))
             cur_start = frag.pos + extra
             cur_len = frag.open_tags_len
-        # print("'" + fragParser.cleantxt[frag.pos - 5:frag.pos + 5] + "'")
+        # elif must_frag_next:
+        #     raise ValueError(f"Unable to fit fragment into specified length (max_len = {max_len})")
         prev_frag = frag
 
-    frag_cnt += 1
     # frag = fragParser.acc[-1]
     open_tags = ''
     if cur_frag != None:
         open_tags = functools.reduce(lambda x, y: x + '<' + y + '>', cur_frag.open_tags, '')
-    close_tags = functools.reduce(lambda x, y: '</' + y + '>' + x, cur_frag.open_tags, '')
+    # close_tags = functools.reduce(lambda x, y: '</' + y + '>' + x, cur_frag.open_tags, '')
 
     # extra = max_len - cur_span 
-
-    # yield f"-- fragment #{frag_cnt}: {frag.pos - cur_start + len(close_tags) + len(open_tags)} chars --"
 
     fragment_text = ''
     if cur_frag != None:
         fragment_text += open_tags
 
-    fragment_text += fragParser.cleantext[cur_start:] + close_tags
+    fragment_text += fragParser.cleantext[cur_start:] # + close_tags
         # + functools.reduce(lambda x, y: '</' + y + '>' + x, frag.open_tags, '')
-    # yield f"-- fragment #{frag_cnt}: {len(fragment_text)} chars --"
+    if len(fragment_text) > max_len:
+        raise ValueError(f"Unable to fit fragment into specified length (max_len = {max_len}): start position {cur_start} \"{fragParser.cleantext[cur_start:cur_start + min(ERROR_CITATION_LENGTH, max_len)]}…\"")
     yield fragment_text
