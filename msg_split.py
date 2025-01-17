@@ -7,9 +7,9 @@ from typing import Generator
 @dataclass
 class Pos:
     pos: int # позиция в cleantxt
-    width: int # возможная вариация — текстовую часть ноды можно бить в любом месте
+    width: int # возможная вариация — текстовую часть ноды можно бить в любом месте по этой ширине
     open_tags: List[str]
-    on_open: bool
+    on_open: bool = True
     open_tags_len: int = field(init=False)
     close_tags_len: int = field(init=False)
     def __post_init__(self):
@@ -19,105 +19,112 @@ class Pos:
             functools.reduce(lambda x, y: x + len(y) + 1 + 2, self.open_tags, 0) if len(self.open_tags) > 0 else 0
 
 class FragParser(HTMLParser):
-    acc: List[Pos]
-    cleantxt: str # пересобираем сюда весь текст сюда только из тегов, атрибутов и текста (тогда, например, лишние пробелы в теге уйдут)
-    stack: List[str] # стек тегов, нужен, чтобы знать, где мы находимся
-    pos: int # текущая позиция в cleantxt
-    can_fragment: List[bool]
+    blockElements = ["p", "b", "strong", "i", "ul", "ol", "div", "span"] # статический список блочных элементов — их можно разбивать
 
     def __init__(self):
         super().__init__()
-        self.blockElements = ["p", "b", "strong", "i", "ul", "ol", "div", "span"]
-        self.pos = 0
-        self.can_fragment = [True]
-        self.stack = ['']
-        self.stacklen = 0
-        self.acc = [Pos(0, 0, self.stack.copy(), True)]
-        self.veryfirsttag = ''
-        self.cleantxt = ''
-        self.i_was_at_top = False
-        self.has_no_root = False
-        self.max_unbreakable_data_len = -1
-        self.reset()
+        self.cleantext = '' # рафинированный текст: пересобираем сюда весь текст только из тегов, атрибутов и текста (тогда например, лишние пробелы между атрибутами пропадут)
+        self.pos = 0 # текущая позиция внутри рафинированного текста
+        self.can_fragment_stack = [True] # стек флагов нахождения в блочном теге – если парсер заедет внутрь неблочного тега, то все вложенные в него теги можно не обрабатывать — их всё равно нельзя разбивать
+        self.tag_stack = [''] # стек тегов — чтобы знать, где мы находимся по ходу парсинга; изначально вставляем туда пустой тег — просто для того, чтобы не проверять всё время наличие корневого тега
+        # self.stacklen = 0
+        self.possible_fragments = [Pos(0, 0, self.tag_stack.copy(), True)] # список возможных мест, где можно разбить входной текст, pos считается по рафинированному тексту (cleantext); изначально вставляется пустой элемент, чтобы не проверять каждый раз на пустоту, элемент соответствует псевдокорню, добавленному в предудущей строке
+        # self.veryfirsttag = ''
+        self.i_was_at_the_top = False # выставляется в True, когда возвращается из самого верхнего тега, нужен для вычисления следующего флага
+        self.no_root = False # выставляется в True, если окажется, что мы уже были на самом верху — это означает, что у входного хтмл-я нет корневого тега (вдруг пригодится)
+        self.max_unbreakable_text_len = -1 # пытаемся посчитать минимальный размер max_len
+        self.reset() # понятия не имею, что это — оно было в учёбнике; скорее всего ресетится родительский парсер
  
     #Defining what the methods should output when called by HTMLParser.
     def handle_starttag(self, tag, attrs):
         # print("Start tag: ", tag)
+        # если пришли в новый тег, а перед этим были в самом верхнем — значит кусок хтмл без корневого тега; нигде не используется, возможно пригодится 
+        self.no_root = self.no_root or self.i_was_at_the_top
 
-        # if not self.has_no_root and self.i_was_at_top:
-        #     self.has_no_root = True
-        self.has_no_root = self.has_no_root or self.i_was_at_top
-
-        if self.veryfirsttag == '':
-            self.veryfirsttag = tag
-
-        can_fragment = tag in self.blockElements and \
-            (len(self.can_fragment) == 0 or self.can_fragment[-1])
+        # флаг, можно ли втыкать фрагмент сразу за этим тегом — можно, если этот тег блочный И родительский тег тоже можно было бить
+        # CHECK проверить, по-моему на пустость проверять не надо уже
+        can_fragment = tag in FragParser.blockElements and \
+            (len(self.can_fragment_stack) == 0 or self.can_fragment_stack[-1])
         
-        self.stack.append(tag) # добавляем тег к стеку тегов
+        self.tag_stack.append(tag) # push тег в стек тегов
 
+        # taglen = len(tag)
         # заполняем чистый текст
-        taglen = len(tag)
-        cleantxt = '<' + tag
-        self.stacklen += taglen
-        totlen = taglen + 2 # учитываем скобки
+        opening_tag_clean_text = '<' + tag
+        # self.stacklen += taglen
+        # набираем длину рафинированного открывающего тега (можно было не выпендриваться, а просто по тексту посчитать)
+        totlen = len(tag) + 2 # учитываем скобки тега
+        # добавляем атрибуты в тег через один пробел
+        # TODO переделать на reduce
         for a in attrs:
             # print("Attributes of the tag: ", a)
-            totlen += 1 + len(a[0]) + 1 + 1 + len(a[1]) + 1 # !!! учесть енкоднутые символы
-            #         _   attrname    =   "   attrval     "
-            # пробел перед атрибутом, кавычки имени атрибута, имя атрибута, знак равно, кавычки значения атрибута, значение атрибута
-            cleantxt += ' ' + a[0] + '="' + a[1] + '"'
-        cleantxt += '>'
-        self.cleantxt += cleantxt
+            totlen += 1  +   len(a[0]) + 1 + 1 + len(a[1]) + 1 # TODO посмотреть, как парсер работает с енкоднутыми символами типа &gt; или &nbsp;
+            #         ↑      ↑           ↑   ↑   ↑           ↑
+            #         пробел attrname    =   "   attrval     "
+            # пробел перед атрибутом, имя атрибута, знак равно, кавычки значения атрибута, значение атрибута
+            opening_tag_clean_text += ' ' + a[0] + '="' + a[1] + '"'
+        opening_tag_clean_text += '>'
+        self.cleantext += opening_tag_clean_text
         self.pos += totlen
         if can_fragment:
-            open_tags = self.stack.copy()[1:]
-            self.acc.append(Pos( self.pos, 0, open_tags, True))
+            open_tags = self.tag_stack.copy()[1:]
+            self.possible_fragments.append(Pos(self.pos, 0, open_tags, True))
             # print("added position: ", str(self.pos) + " {" + self.cleantxt + "}")
             # self.acc.append(Pos( self.pos, 0, self.stack.copy()[1:] ))
             # open_tags_len = \
             #     functools.reduce(lambda x, y: x + len(y), open_tags, len(open_tags[0])) if len(open_tags) > 0 else 0
             # close_tags_len = functools.reduce(lambda x, y: x + len(y) + 1, open_tags, len(open_tags[0]) + 1)
-            diff = self.acc[-1].open_tags_len + self.pos - (self.acc[-2].pos + self.acc[-2].width) + self.acc[-1].close_tags_len
-            if self.max_unbreakable_data_len < diff:
-                self.max_unbreakable_data_len = diff
-        self.can_fragment.append(can_fragment)
+            # вычисляем расстояние между новым и предыдущим возможным фрагментом:
+            diff = self.possible_fragments[-1].open_tags_len + self.pos - \
+                (self.possible_fragments[-2].pos + self.possible_fragments[-2].width) + \
+                self.possible_fragments[-1].close_tags_len
+            if self.max_unbreakable_text_len < diff:
+                self.max_unbreakable_text_len = diff
+
+        self.can_fragment_stack.append(can_fragment)
  
     def handle_data(self, data):
         # print("Data: '" + data + "'")
         self.pos += len(data)
-        self.cleantxt += data
-        if len(self.can_fragment) == 0 or self.can_fragment[-1]: # если можно разбивать, то весь этот текст надо учесть в последней записи разбиения
-            self.acc[-1].width = len(data)
+        self.cleantext += data
+        # важно: если мы находимся в теге, который можно разбивать (то есть он находится на верхушке стека возможных фрагментов), то весь этот текст (data) надо учесть в этой верхушке (в последней записи возможного фрагмента)
+        # CHECK по-моему, можно выкинуть проверку на пустой стек
+        if len(self.can_fragment_stack) == 0 or self.can_fragment_stack[-1]: 
+            self.possible_fragments[-1].width = len(data)
  
     def handle_endtag(self, tag):
         # print("End tag: ", tag)
-        endtag = self.stack.pop()
-        self.cleantxt += "</" + tag + ">"
-        taglen = len(tag)
-        totlen = taglen + 2 + 1 # учитываем скобки и косую черту
+        # endtag = self.tag_stack.pop()
+        # добавляем к рафинированному тексту закрывающий тег
+        self.cleantext += "</" + tag + ">"
+        # taglen = len(tag)
+        totlen = len(tag) + 2 + 1 # учитываем скобки и косую черту
         self.pos += totlen
         # if len(self.stack) == 0 and endtag != self.veryfirsttag:
         #     print("NO TOP TAG!!!")
 
-        could_fragment = self.can_fragment.pop()
-        can_fragment = len(self.can_fragment) == 0 or self.can_fragment[-1]
+        could_fragment = self.can_fragment_stack.pop()
+        # CHECK по-моему, можно не проверять на пустой стек
+        can_fragment = len(self.can_fragment_stack) == 0 or self.can_fragment_stack[-1]
         # if not could_fragment and can_fragment: # если нельзя было и опять стало можно, то добавим точку разбиения
-        if can_fragment: # если нельзя было и опять стало можно, то добавим точку разбиения
-            open_tags = self.stack.copy()[1:]
-            self.acc.append(Pos( self.pos, 0, open_tags, False))
+        # если можно бить, то после закрывающего тега добавим точку разбиения
+        if can_fragment: 
+            # делаем копию стека тегов
+            open_tags = self.tag_stack.copy()[1:]
+            self.possible_fragments.append(Pos( self.pos, 0, open_tags, False))
             # print("added position: ", str(self.pos) + " {" + self.cleantxt + "}")
             # print("added position: ", ">>" + self.cleantxt + "<<")
             # open_tags_len = \
             #     functools.reduce(lambda x, y: x + len(y), open_tags, len(open_tags[0])) if len(open_tags) > 0 else 0
             # close_tags_len = functools.reduce(lambda x, y: x + len(y) + 1, open_tags, len(open_tags[0]) + 1)
             # diff = self.acc[-1].open_tags_len + self.pos - (self.acc[-2].pos + self.acc[-2].width)
-            diff = self.acc[-1].open_tags_len + self.pos - (self.acc[-2].pos + self.acc[-2].width) + self.acc[-1].close_tags_len
-            if self.max_unbreakable_data_len < diff:
-                self.max_unbreakable_data_len = diff
+            diff = self.possible_fragments[-1].open_tags_len + self.pos - (self.possible_fragments[-2].pos + self.possible_fragments[-2].width) + self.possible_fragments[-1].close_tags_len
+            if self.max_unbreakable_text_len < diff:
+                self.max_unbreakable_text_len = diff
 
-        if len(self.can_fragment) == 1:
-            self.i_was_at_top = True
+        # если это верхний тег (остался только фейковый пустой корень), то выставляем флаг "я был наверху"
+        if len(self.can_fragment_stack) == 1:
+            self.i_was_at_the_top = True
 
 MAX_LEN = 4096
 
@@ -137,7 +144,7 @@ def split_message(source: str, max_len=MAX_LEN) -> Generator[str]:
 
     # print('\nfragments:')
     # первый 
-    for frag in fragParser.acc:
+    for frag in fragParser.possible_fragments:
         cur_span = frag.pos - cur_start + frag.close_tags_len + cur_len
         if cur_span > max_len: # CHECK!!! не может быть первая проверка, иначе исключение (проверкить prev != None)
             # print('frag: ', fragParser.cleantxt[cur_start:prev.pos + 1], prev.close_tags_len)
@@ -159,7 +166,7 @@ def split_message(source: str, max_len=MAX_LEN) -> Generator[str]:
             # print(open_tags, end='')
 
             # print(fragParser.cleantxt[cur_start:prev_frag.pos + prev_frag.width] + close_tags)
-            fragment_text += fragParser.cleantxt[cur_start:prev_frag.pos + prev_frag.width] + close_tags
+            fragment_text += fragParser.cleantext[cur_start:prev_frag.pos + prev_frag.width] + close_tags
             yield fragment_text
             # print('open: ', functools.reduce(lambda x, y: x + '<' + y + '>', prev.open_tags, ''))
             cur_start = prev_frag.pos + prev_frag.width
@@ -183,7 +190,7 @@ def split_message(source: str, max_len=MAX_LEN) -> Generator[str]:
                 # print(open_tags, end='')
                 fragment_text = open_tags
 
-            fragment_text += fragParser.cleantxt[cur_start:frag.pos + extra] + close_tags
+            fragment_text += fragParser.cleantext[cur_start:frag.pos + extra] + close_tags
             yield fragment_text
 
             cur_frag = frag
@@ -208,7 +215,7 @@ def split_message(source: str, max_len=MAX_LEN) -> Generator[str]:
     if cur_frag != None:
         fragment_text += open_tags
 
-    fragment_text += fragParser.cleantxt[cur_start:] + close_tags
+    fragment_text += fragParser.cleantext[cur_start:] + close_tags
         # + functools.reduce(lambda x, y: '</' + y + '>' + x, frag.open_tags, '')
     # yield f"-- fragment #{frag_cnt}: {len(fragment_text)} chars --"
     yield fragment_text
