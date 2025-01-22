@@ -48,29 +48,22 @@ class FragParser(HTMLParser):
 
         # рафинируем тег
         opening_tag_clean_text = '<' + tag
-        # набираем длину рафинированного открывающего тега (можно было не выпендриваться, а просто по тексту посчитать)
-        totlen = len(tag) + 2 # учитываем скобки тега
+
+        # TODO проверить несколько атрибутов, в примерах только один - DONE, test_simple_4
         # добавляем атрибуты в тег через один пробел
-        # TODO переделать на reduce
-        for a in attrs:
-            # print("Attributes of the tag: ", a)
-            totlen += 1  +   len(a[0]) + 1 + 1 + len(a[1]) + 1 # TODO посмотреть, как парсер работает с енкоднутыми символами типа &gt; или &nbsp;
-            #         ↑      ↑           ↑   ↑   ↑           ↑
-            #         пробел attrname    =   "   attrval     "
-            # пробел перед атрибутом, имя атрибута, знак равно, кавычки значения атрибута, значение атрибута
-            opening_tag_clean_text += ' ' + a[0] + '="' + a[1] + '"'
+        opening_tag_clean_text = functools.reduce(
+            lambda x, y: x + ' ' + y[0] + '="' + y[1] + '"', 
+            attrs, 
+            opening_tag_clean_text)
+
+        # закрываем открывающий тег
         opening_tag_clean_text += '>'
         self.cleantext += opening_tag_clean_text
-        self.pos += totlen
+
+        # добавляем его длину к позиции
+        self.pos += len(opening_tag_clean_text)
         if can_fragment:
-            open_tags = self.tag_stack.copy()[1:]
-            self.possible_fragments.append(Pos(self.pos, 0, open_tags, True))
-            # вычисляем расстояние между новым и предыдущим возможным фрагментом:
-            diff = self.possible_fragments[-1].open_tags_len + self.pos - \
-                (self.possible_fragments[-2].pos + self.possible_fragments[-2].width) + \
-                self.possible_fragments[-1].close_tags_len
-            if self.max_unbreakable_text_len < diff:
-                self.max_unbreakable_text_len = diff
+            self.add_possible_fragment(True)
 
         self.can_fragment_stack.append(can_fragment)
  
@@ -93,16 +86,24 @@ class FragParser(HTMLParser):
         can_fragment = len(self.can_fragment_stack) == 0 or self.can_fragment_stack[-1]
         # если можно бить, то после закрывающего тега добавим точку разбиения
         if can_fragment: 
-            # делаем копию стека тегов
-            open_tags = self.tag_stack.copy()[1:]
-            self.possible_fragments.append(Pos( self.pos, 0, open_tags, False))
-            diff = self.possible_fragments[-1].open_tags_len + self.pos - (self.possible_fragments[-2].pos + self.possible_fragments[-2].width) + self.possible_fragments[-1].close_tags_len
-            if self.max_unbreakable_text_len < diff:
-                self.max_unbreakable_text_len = diff
+            self.add_possible_fragment(False)
 
         # если это верхний тег (остался только фейковый пустой корень), то выставляем флаг "я был наверху"
         if len(self.can_fragment_stack) == 1:
             self.i_was_at_the_top = True
+
+    def add_possible_fragment(self, on_open):
+        # делаем копию стека тегов
+        open_tags = self.tag_stack.copy()[1:]
+        # добавляем запись в список возможных фрагментов
+        self.possible_fragments.append(Pos(self.pos, 0, open_tags, on_open))
+        # обновляем, если изменяется, минимальную длину фрагмента
+        # вычисляем расстояние между новым и предыдущим возможным фрагментом
+        diff = self.possible_fragments[-1].open_tags_len + self.pos - \
+                (self.possible_fragments[-2].pos + self.possible_fragments[-2].width) + \
+                self.possible_fragments[-1].close_tags_len
+        # если расстояние больше текущего максимума — обновляем максимум
+        self.max_unbreakable_text_len = max(diff, self.max_unbreakable_text_len)
 
 MAX_LEN = 4096
 
