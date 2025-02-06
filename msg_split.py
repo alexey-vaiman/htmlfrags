@@ -131,10 +131,12 @@ def split_message(source: str, max_len=MAX_LEN) -> Generator[str]:
         cur_span = frag.pos - cur_start + frag.close_tags_len + cur_open_tags_len
         # если длина текста до текущего фрагмента превышает значение параметра max_len,
         # то сначала обрываем текст по предыдущему фрагменту (он сохранён в prev_frag),
-        # а затем пробуем уместить текущий кусок в фрагмент (см. второй if)
+        # а затем пробуем уместить текущий кусок в фрагмент (см. следующий if)
         if cur_span > max_len: # CHECK!!! не может быть первая проверка, иначе исключение (проверкить prev != None)
+            # собираем закрывающие теги, чтобы закрыть предыдущий фрагмент
             close_tags = functools.reduce(lambda x, y: '</' + y + '>' + x, prev_frag.open_tags, '')
 
+            # если это самый первый фрагмент (а так бывает?)
             first_time = cur_frag == None
             if first_time:
                 cur_frag = prev_frag
@@ -148,43 +150,46 @@ def split_message(source: str, max_len=MAX_LEN) -> Generator[str]:
                 raise ValueError(f"Unable to fit fragment into specified length (max_len = {max_len}): start position {cur_start} \"{fragParser.cleantext[cur_start:cur_start + min(ERROR_CITATION_LENGTH, max_len)]}…\"")
 
             yield fragment_text
-            # print('open: ', functools.reduce(lambda x, y: x + '<' + y + '>', prev.open_tags, ''))
+
+            # вычисляем начало следующего фрагмента, длину открывающих тегов (для учёта длины набираемого фрагмента), длину набранного следующего фрагмента 
             cur_start = prev_frag.pos + prev_frag.width
             cur_open_tags_len = prev_frag.open_tags_len
             cur_span = frag.pos - (prev_frag.pos + prev_frag.width) + frag.close_tags_len + prev_frag.open_tags_len
+            # сдвигаем фрагмент
             cur_frag = prev_frag
+        # если набранный фрагмент умещается в max_len, а со всем текущим текстом разбиения — не умещается, то
+        # бьём по max_len набранный фрагмент и начинаем считать следующий, с остатка текста текущего фрагмента
         if cur_span <= max_len and cur_span + frag.width > max_len:
+            # собираем открывающие теги текущего фрагмента (если это не первый фрагмент, потому что в первом они уже есть в тексте)
             open_tags = ''
             if cur_frag != None:
                 open_tags = functools.reduce(lambda x, y: x + '<' + y + '>', cur_frag.open_tags, '')
+            # собираем закрывающие теги — всегда, кроме последнего фрагмента (это выполняется уже за текущим циклом)
             close_tags = functools.reduce(lambda x, y: '</' + y + '>' + x, frag.open_tags, '')
 
-            extra = max_len - cur_span 
+            # вычисляем количество символов, которые надо взять из текста текущего фрагмента для заполнения до max_len
+            extra = max_len - cur_span
             
-            fragment_text = ''
-            if cur_frag != None:
-                fragment_text = open_tags
-
-            fragment_text += fragParser.cleantext[cur_start:frag.pos + extra] + close_tags
+            # собираме текст фрагмента = открывающие теги (если есть) + кусок чистого текста (с возможными тегами) + закрывающие теги
+            fragment_text = open_tags + fragParser.cleantext[cur_start:frag.pos + extra] + close_tags
 
             if len(fragment_text) > max_len:
                 raise ValueError(f"Unable to fit fragment into specified length (max_len = {max_len}): start position {cur_start} \"{fragParser.cleantext[cur_start:cur_start + min(ERROR_CITATION_LENGTH, max_len)]}…\"")
             yield fragment_text
 
+            # переставляем переменные — текущий фрагмент, старт текущего фрагмента, сдвинутый на уже использованный в предыдущем фрагменте текст,
+            # и переменную, в которой хранится длина повторённых открывающих тегов (используется в начале цикла для вычисления длины следующего фрагмента)
             cur_frag = frag
             cur_start = frag.pos + extra
             cur_open_tags_len = frag.open_tags_len
+        # переставляем переменную, храняющую предыдущий фрагмент
         prev_frag = frag
 
-    open_tags = ''
-    if cur_frag != None:
-        open_tags = functools.reduce(lambda x, y: x + '<' + y + '>', cur_frag.open_tags, '')
+    # набираем открывающие теги (если уже был хотя бы один фрагмент)
+    open_tags = functools.reduce(lambda x, y: x + '<' + y + '>', cur_frag.open_tags, '') if cur_frag != None else ''
+    # набираем текст фрагмента = открывающие теги, кусок текста до конца (с последнего фрагмента) — а последние закрывающие теги уже есть в рафинированной строке
+    fragment_text = open_tags + fragParser.cleantext[cur_start:]
 
-    fragment_text = ''
-    if cur_frag != None:
-        fragment_text += open_tags
-
-    fragment_text += fragParser.cleantext[cur_start:] # а последние закрывающие теги уже есть в рафинированной строке
     if len(fragment_text) > max_len:
         raise ValueError(f"Unable to fit fragment into specified length (max_len = {max_len}): start position {cur_start} \"{fragParser.cleantext[cur_start:cur_start + min(ERROR_CITATION_LENGTH, max_len)]}…\"")
     yield fragment_text
